@@ -1,0 +1,319 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+  --primary: #ff3333;
+  --primary-dark: #cc0000;
+  --primary-light: #ff6666;
+  --primary-gradient: linear-gradient(135deg, #ff5e62, #ff9966);
+  --sidebar-bg: #1f1f1f;
+  --content-bg: #f8f8f8;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+    --primary: #ff3333;
+    --primary-dark: #cc0000;
+    --primary-light: #ff6666;
+    --primary-gradient: linear-gradient(135deg, #ff5e62, #ff9966);
+    --sidebar-bg: #1a1a1a;
+    --content-bg: #111111;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+  overflow: hidden;
+}
+
+.sidebar {
+  background-color: var(--sidebar-bg);
+  border-right: 1px solid rgba(255, 51, 51, 0.3);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+}
+
+.content-area {
+  background-color: var(--content-bg);
+  position: relative;
+}
+
+.btn-primary {
+  background-image: var(--primary-gradient);
+  color: white;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 6px rgba(255, 51, 51, 0.2);
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 8px rgba(255, 51, 51, 0.3);
+}
+
+.space-item {
+  border-left: 3px solid transparent;
+  transition: all 0.2s ease;
+  color: #f0f0f0;
+  margin-bottom: 4px;
+}
+
+.space-item:hover {
+  border-left-color: var(--primary);
+  background-color: rgba(255, 51, 51, 0.15);
+  transform: translateX(2px);
+}
+
+.space-item.active {
+  border-left-color: var(--primary);
+  background-color: rgba(255, 51, 51, 0.25);
+  font-weight: bold;
+}
+
+.space-item.dragging {
+  opacity: 0.6;
+  background-color: rgba(255, 51, 51, 0.3);
+}
+
+.space-item.drag-over {
+  border-bottom: 2px dashed var(--primary);
+}
+
+.topic-circle {
+  width: 80px;
+  height: 80px;
+  background-image: var(--primary-gradient);
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  z-index: 10;
+}
+
+.topic-inner-circle {
+  width: 70px;
+  height: 70px;
+}
+
+.topic-circle:hover {
+  transform: scale(1.05);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+}
+
+.dragging {
+  z-index: 100 !important;
+  cursor: grabbing !important;
+  opacity: 0.9;
+}
+
+.dragging .topic-circle {
+  transform: scale(1.1);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+}
+
+.topic-title {
+  color: var(--foreground);
+  font-weight: 500;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.add-space-button {
+  background-image: var(--primary-gradient);
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  position: relative;
+  z-index: 20;
+  cursor: pointer;
+}
+
+.add-space-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 8px rgba(0, 0, 0, 0.2);
+}
+
+.add-topic-button {
+  background-image: var(--primary-gradient);
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  z-index: 50;
+}
+
+.add-topic-button:hover {
+  transform: scale(1.1) rotate(90deg);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.empty-state {
+  animation: pulse 2s infinite ease-in-out;
+}
+
+/* Rich text editor styles */
+.rich-text-editor {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.rich-text-editor * {
+  max-width: 100%;
+}
+
+/* Preserve styles in rich content */
+.rich-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.rich-content * {
+  max-width: 100%;
+}
+
+/* Preserve formatting from external sources */
+.rich-content ul, 
+.rich-text-editor ul {
+  list-style-type: disc;
+  margin-left: 1.5em;
+}
+
+.rich-content ol,
+.rich-text-editor ol {
+  list-style-type: decimal;
+  margin-left: 1.5em;
+}
+
+.rich-content li,
+.rich-text-editor li {
+  margin-bottom: 0.25em;
+}
+
+.rich-content p,
+.rich-text-editor p {
+  margin-bottom: 0.75em;
+}
+
+.rich-content a,
+.rich-text-editor a {
+  color: #3b82f6;
+  text-decoration: underline;
+}
+
+.rich-content h1, .rich-content h2, .rich-content h3, 
+.rich-content h4, .rich-content h5, .rich-content h6,
+.rich-text-editor h1, .rich-text-editor h2, .rich-text-editor h3, 
+.rich-text-editor h4, .rich-text-editor h5, .rich-text-editor h6 {
+  font-weight: bold;
+  margin: 0.75em 0 0.5em 0;
+}
+
+.rich-content h1,
+.rich-text-editor h1 {
+  font-size: 1.5em;
+}
+
+.rich-content h2,
+.rich-text-editor h2 {
+  font-size: 1.3em;
+}
+
+.rich-content h3,
+.rich-text-editor h3 {
+  font-size: 1.1em;
+}
+
+.rich-content code,
+.rich-text-editor code {
+  font-family: monospace;
+  background-color: rgba(0, 0, 0, 0.1);
+  padding: 0.1em 0.3em;
+  border-radius: 0.2em;
+}
+
+.rich-content pre,
+.rich-text-editor pre {
+  background-color: rgba(0, 0, 0, 0.2);
+  padding: 1em;
+  border-radius: 0.3em;
+  overflow-x: auto;
+  margin: 0.75em 0;
+}
+
+.rich-content table,
+.rich-text-editor table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.75em 0;
+}
+
+.rich-content th, .rich-content td,
+.rich-text-editor th, .rich-text-editor td {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 0.5em;
+}
+
+.rich-content th,
+.rich-text-editor th {
+  background-color: rgba(0, 0, 0, 0.2);
+  font-weight: bold;
+}
+
+/* Ensure images don't overflow */
+.rich-content img,
+.rich-text-editor img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Preserve font styles */
+.rich-content [style*="font-family"],
+.rich-text-editor [style*="font-family"] {
+  font-family: inherit !important;
+}
+
+/* Preserve background colors but make them more subtle */
+.rich-content [style*="background-color"],
+.rich-text-editor [style*="background-color"] {
+  background-color: rgba(0, 0, 0, 0.2) !important;
+}
+
+/* Force text colors to be visible on dark background */
+.rich-content [style*="color"],
+.rich-text-editor [style*="color"] {
+  color: inherit !important;
+}
+
+/* Preserve specific styling that should be kept */
+.rich-content b, .rich-content strong,
+.rich-text-editor b, .rich-text-editor strong {
+  font-weight: bold !important;
+}
+
+.rich-content i, .rich-content em,
+.rich-text-editor i, .rich-text-editor em {
+  font-style: italic !important;
+}
+
+.rich-content u,
+.rich-text-editor u {
+  text-decoration: underline !important;
+}
+
+.rich-content strike, .rich-content s, .rich-content del,
+.rich-text-editor strike, .rich-text-editor s, .rich-text-editor del {
+  text-decoration: line-through !important;
+}

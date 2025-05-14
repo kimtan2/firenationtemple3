@@ -891,7 +891,6 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
             </div>
           )}
         </div>
-      </div>
       </FlashcardsContext.Provider>
     </SubjectPageContext.Provider>
   );

@@ -257,16 +257,44 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
       
       await updateDoc(doc(db, `topics/${params.id}/flashcards`, editingCardId), updatedFlashcard);
       
+      // Create the complete updated flashcard with id included
+      const completeUpdatedCard = {
+        ...updatedFlashcard,
+        id: editingCardId
+      };
+      
       // Update the flashcard in the local state
-      setFlashcards(flashcards.map(card => 
+      const updatedFlashcards = flashcards.map(card => 
         card.id === editingCardId 
-          ? { ...card, ...updatedFlashcard } 
+          ? completeUpdatedCard 
           : card
-      ));
+      );
+      
+      // Get the learning mode state that was stored when editing started
+      const learningState = (handleEditFlashcard as any).learningModeState;
+      
+      // If we were in learning mode before editing, prepare to restore that state
+      if (learningState?.wasInLearningMode) {
+        // Make sure we update the selectedCard directly if it's the one being edited
+        if (selectedCard && selectedCard.id === editingCardId) {
+          // Update the selected card with the new data
+          setSelectedCard(completeUpdatedCard);
+        }
+      }
+      
+      // Update the flashcards array
+      setFlashcards(updatedFlashcards);
       
       resetForm();
       setIsEditingCard(false);
       setEditingCardId(null);
+      
+      // If we were in learning mode before editing, restore the rest of the state
+      if (learningState?.wasInLearningMode) {
+        // Restore the card index and show answer state
+        setCurrentCardIndex(learningState.previousCardIndex);
+        setShowAnswer(learningState.previousShowAnswer);
+      }
     } catch (error) {
       console.error('Error updating flashcard:', error);
     }
@@ -291,6 +319,11 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
 
   // Open the edit modal for a flashcard
   const handleEditFlashcard = (card: Flashcard) => {
+    // Store the current learning state if we're in learning mode
+    const wasInLearningMode = selectedCard !== null;
+    const previousCardIndex = currentCardIndex;
+    const previousShowAnswer = showAnswer;
+    
     setEditingCardId(card.id);
     setNewQuestion(card.question);
     setNewQuestionHtml(card.questionHtmlContent || '');
@@ -300,6 +333,18 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
     setIsItalic(card.isItalic || false);
     setTextColor(card.textColor || '#FFFFFF');
     setIsEditingCard(true);
+    
+    // Store the learning mode state in the component for later restoration
+    setIsEditingCard(prevState => {
+      // Store these values in a property of the state update function
+      // so they can be accessed later when updating is complete
+      (handleEditFlashcard as any).learningModeState = {
+        wasInLearningMode,
+        previousCardIndex,
+        previousShowAnswer
+      };
+      return true;
+    });
     
     // Set HTML content to the editor when the modal is open
     setTimeout(() => {
@@ -453,7 +498,7 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
     <SubjectPageContext.Provider value={{ handleEditFlashcard, handleDeleteFlashcard }}>
       <FlashcardsContext.Provider value={{ flashcards, updateFlashcardOrder }}>
         <div className="min-h-screen bg-gray-900 text-white p-6 overflow-y-auto">
-          <div className="max-w-4xl mx-auto">
+          <div className="w-full mx-auto">
             {/* Header */}
             <div className="mb-8">
               <Link href="/" className="text-red-400 hover:text-red-300 mb-4 inline-flex items-center">
@@ -490,8 +535,8 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
                       onClick={() => {
                         if (selectedCard) {
                           handleEditFlashcard(selectedCard);
-                          setSelectedCard(null);
-                          setShowAnswer(false);
+                          // Don't reset selectedCard or showAnswer here
+                          // The state will be restored after editing
                         }
                       }}
                       className="text-gray-500 hover:text-blue-600 bg-gray-100 hover:bg-gray-200 p-1.5 rounded-full transition-colors"
@@ -619,7 +664,7 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
                     <p className="text-gray-400">No flashcards yet. Create your first one!</p>
                   </div>
                 ) : (
-                  <div className="grid gap-5 md:grid-cols-2 max-h-[70vh] overflow-y-auto pr-2">
+                  <div className="max-h-[70vh] overflow-y-auto pr-2">
                     <FlashcardsList />
                   </div>
                 )}
@@ -801,87 +846,120 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
           {/* Edit Flashcard Modal */}
           {isEditingCard && (
             <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-              <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md">
+              <div className="bg-white rounded-xl p-6 w-full max-w-2xl shadow-xl border border-gray-200 max-h-[90vh] overflow-y-auto">
                 <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-semibold">Edit Flashcard</h2>
-                  <button 
-                    onClick={() => {
-                      resetForm();
-                      setIsEditingCard(false);
-                      setEditingCardId(null);
-                    }}
-                    className="text-gray-400 hover:text-white"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-                
-                <div className="mb-4">
-                  <label className="block text-gray-300 mb-2">Question</label>
-                  <div
-                    ref={questionEditorRef}
-                    contentEditable
-                    onPaste={handleQuestionPaste}
-                    onInput={handleQuestionChange}
-                    className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 mb-2 min-h-[50px] rich-text-editor"
-                  />
-                </div>
-                
-                <div className="mb-6">
-                  <label className="block text-gray-300 mb-2">Text Styling (Question)</label>
+                  <div className="flex items-center">
+                    <h2 className="text-xl font-semibold text-gray-800 mr-3">Edit Flashcard</h2>
+                  </div>
                   <div className="flex space-x-2">
-                    <button type="button" onClick={() => { document.execCommand('bold'); handleQuestionChange(); }} className="px-3 py-1 rounded bg-gray-600">Bold</button>
-                    <button type="button" onClick={() => { document.execCommand('italic'); handleQuestionChange(); }} className="px-3 py-1 rounded bg-gray-600">Italic</button>
-                    <div className="flex items-center">
-                      <span className="mr-2">Color:</span>
-                      <input type="color" value={textColor} onChange={(e) => { document.execCommand('foreColor', false, e.target.value); handleQuestionChange(); setTextColor(e.target.value); }} className="h-8 w-8 rounded cursor-pointer" />
-                    </div>
+                    <button 
+                      onClick={() => {
+                        resetForm();
+                        setIsEditingCard(false);
+                        setEditingCardId(null);
+                        
+                        // Restore learning mode if we were in it
+                        const learningState = (handleEditFlashcard as any).learningModeState;
+                        if (learningState?.wasInLearningMode) {
+                          setCurrentCardIndex(learningState.previousCardIndex);
+                          setSelectedCard(flashcards[learningState.previousCardIndex]);
+                          setShowAnswer(learningState.previousShowAnswer);
+                        }
+                      }}
+                      className="text-gray-500 hover:text-red-600 bg-gray-100 hover:bg-gray-200 p-1.5 rounded-full transition-colors"
+                      title="Close"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="card-container mb-6">
+                  <div className="mb-4">
+                    <h3 className="text-lg font-medium mb-2 text-gray-800">Question:</h3>
+                    <div
+                      ref={questionEditorRef}
+                      contentEditable
+                      onPaste={handleQuestionPaste}
+                      onInput={handleQuestionChange}
+                      className="w-full p-4 bg-gray-50 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500 mb-2 min-h-[100px] rich-text-editor text-gray-800 font-medium"
+                    />
+                  </div>
+                  
+                  <div className="mb-4">
+                    <h3 className="text-lg font-medium mb-2 text-gray-800">Answer:</h3>
+                    <div
+                      ref={answerEditorRef}
+                      contentEditable
+                      onPaste={handlePaste}
+                      onInput={handleAnswerChange}
+                      className="w-full p-4 bg-gray-50 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500 mb-2 min-h-[150px] max-h-[300px] overflow-y-auto rich-text-editor text-gray-800 font-medium"
+                    />
                   </div>
                 </div>
                 
                 <div className="mb-6">
-                  <label className="block text-gray-300 mb-2">Answer</label>
-                  <div
-                    ref={answerEditorRef}
-                    contentEditable
-                    onPaste={handlePaste}
-                    onInput={handleAnswerChange}
-                    className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 mb-2 min-h-[100px] max-h-[300px] overflow-y-auto rich-text-editor"
-                  />
-                </div>
-                
-                <div className="mb-6">
-                  <label className="block text-gray-300 mb-2">Text Styling (Answer)</label>
-                  <div className="flex space-x-2">
-                    <button type="button" onClick={() => { document.execCommand('bold'); handleAnswerChange(); }} className="px-3 py-1 rounded bg-gray-600">Bold</button>
-                    <button type="button" onClick={() => { document.execCommand('italic'); handleAnswerChange(); }} className="px-3 py-1 rounded bg-gray-600">Italic</button>
+                  <h3 className="text-lg font-medium mb-2 text-gray-800">Text Styling:</h3>
+                  <div className="flex space-x-4 bg-gray-50 p-3 rounded-lg border border-gray-200">
+                    <button 
+                      type="button" 
+                      onClick={() => { document.execCommand('bold'); handleAnswerChange(); handleQuestionChange(); }} 
+                      className="px-4 py-2 rounded-lg bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 font-medium shadow-sm"
+                    >
+                      Bold
+                    </button>
+                    <button 
+                      type="button" 
+                      onClick={() => { document.execCommand('italic'); handleAnswerChange(); handleQuestionChange(); }} 
+                      className="px-4 py-2 rounded-lg bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 font-medium shadow-sm"
+                    >
+                      Italic
+                    </button>
                     <div className="flex items-center">
-                      <span className="mr-2">Color:</span>
-                      <input type="color" value={textColor} onChange={(e) => { document.execCommand('foreColor', false, e.target.value); handleAnswerChange(); setTextColor(e.target.value); }} className="h-8 w-8 rounded cursor-pointer" />
+                      <span className="mr-2 text-gray-700 font-medium">Color:</span>
+                      <input 
+                        type="color" 
+                        value={textColor} 
+                        onChange={(e) => { 
+                          document.execCommand('foreColor', false, e.target.value); 
+                          handleAnswerChange(); 
+                          handleQuestionChange(); 
+                          setTextColor(e.target.value); 
+                        }} 
+                        className="h-10 w-10 rounded cursor-pointer border border-gray-300 shadow-sm" 
+                      />
                     </div>
                   </div>
                 </div>
                 
-                <div className="flex justify-end space-x-3">
+                <div className="flex justify-between items-center mt-6">
                   <button
                     onClick={() => {
                       resetForm();
                       setIsEditingCard(false);
                       setEditingCardId(null);
+                      
+                      // Restore learning mode if we were in it
+                      const learningState = (handleEditFlashcard as any).learningModeState;
+                      if (learningState?.wasInLearningMode) {
+                        setCurrentCardIndex(learningState.previousCardIndex);
+                        setSelectedCard(flashcards[learningState.previousCardIndex]);
+                        setShowAnswer(learningState.previousShowAnswer);
+                      }
                     }}
-                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg"
+                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-gray-700 font-medium shadow-sm"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={handleUpdateFlashcard}
                     disabled={!newQuestion.trim() || (!newAnswer.trim() && !newHtmlContent)}
-                    className={`px-4 py-2 rounded-lg ${
+                    className={`px-6 py-2 rounded-lg font-medium shadow-md ${
                       !newQuestion.trim() || (!newAnswer.trim() && !newHtmlContent)
-                        ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                        : 'bg-red-500 hover:bg-red-600'
+                        ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-400 hover:to-red-500 text-white transition-all duration-200 transform hover:scale-105 shadow-red-500/20 hover:shadow-red-400/30'
                     }`}
                   >
                     Save Changes
@@ -950,9 +1028,10 @@ function DraggableFlashcard({ card, index, onEdit, onDelete }: {
       
       // Determine mouse position
       const clientOffset = monitor.getClientOffset();
+      if (!clientOffset) return;
       
       // Get pixels to the top
-      const hoverClientY = clientOffset ? clientOffset.y - hoverBoundingRect.top : 0;
+      const hoverClientY = clientOffset.y - hoverBoundingRect.top;
       
       // Only perform the move when the mouse has crossed half of the items height
       // When dragging downwards, only move when the cursor is below 50%
@@ -1098,7 +1177,7 @@ function FlashcardsList() {
   const { handleEditFlashcard, handleDeleteFlashcard } = subjectPageContext;
   
   return (
-    <>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
       {flashcards.map((card, index) => (
         <DraggableFlashcard 
           key={card.id} 
@@ -1108,6 +1187,6 @@ function FlashcardsList() {
           onDelete={handleDeleteFlashcard}
         />
       ))}
-    </>
+    </div>
   );
 }

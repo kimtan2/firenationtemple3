@@ -27,6 +27,7 @@ export interface Topic {
   content: string;
   posX: number;
   posY: number;
+  successAverage?: number; // Average status across all flashcards
 }
 
 // Collection references for Firestore
@@ -187,6 +188,17 @@ export async function deleteSpace(id: string): Promise<void> {
     await deleteDoc(doc(spacesCollection, id));
   } catch (error) {
     console.error('Error deleting space:', error);
+    throw error;
+  }
+}
+
+// Function to update topic success average
+export async function updateTopicSuccessAverage(id: string, successAverage: number): Promise<void> {
+  try {
+    // Update in Firestore
+    await updateDoc(doc(topicsCollection, id), { successAverage });
+  } catch (error) {
+    console.error('Error updating topic success average:', error);
     throw error;
   }
 }

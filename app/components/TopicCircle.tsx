@@ -128,9 +128,26 @@ const TopicCircle: React.FC<TopicCircleProps> = ({ topic, onClick }) => {
           className="topic-inner-circle flex items-center justify-center rounded-full bg-white bg-opacity-10 backdrop-blur-sm"
           style={{ width: '70px', height: '70px' }}
         >
-          <span className="text-white font-bold text-xl" data-component-name="TopicCircle">
-            {topic.title.charAt(0).toUpperCase()}
-          </span>
+          <div className="flex flex-col items-center justify-center">
+            <span className="text-white font-bold text-xl" data-component-name="TopicCircle">
+              {topic.title.charAt(0).toUpperCase()}
+            </span>
+            
+            {/* Success average indicator */}
+            {topic.successAverage !== undefined && (
+              <span 
+                className={`text-xs font-semibold mt-1 px-2 py-0.5 rounded-full ${
+                  topic.successAverage <= 1.5 ? 'bg-gray-500' :
+                  topic.successAverage <= 2.5 ? 'bg-yellow-500' :
+                  topic.successAverage <= 3.5 ? 'bg-blue-500' :
+                  'bg-green-500'
+                }`}
+                title={`Erfolgsergebnis: ${topic.successAverage.toFixed(2)}`}
+              >
+                {topic.successAverage.toFixed(1)}
+              </span>
+            )}
+          </div>
         </div>
       </div>
       <div className="topic-title text-center mt-2 font-medium text-sm">{topic.title}</div>

@@ -4,7 +4,7 @@ import React, { useState, useEffect, use, useRef, createContext, useContext } fr
 import { useRouter } from 'next/navigation';
 import { doc, getDoc, collection, getDocs, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
-import { Topic } from '../../lib/db';
+import { Topic, updateTopicSuccessAverage } from '../../lib/db';
 import Link from 'next/link';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -20,6 +20,7 @@ interface Flashcard {
   questionHtmlContent?: string;
   htmlContent?: string;
   idOrder: number;
+  status?: number; // 1-4 status level for tracking learning progress
 }
 
 // Create FlashcardsContext
@@ -81,6 +82,7 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const answerEditorRef = useRef<HTMLDivElement>(null);
   const questionEditorRef = useRef<HTMLDivElement>(null);
+  const [statusFilter, setStatusFilter] = useState<number | null>(null);
 
   // Function to update flashcard order in database
   const updateFlashcardOrderInDb = async (reorderedCards: Flashcard[]) => {
@@ -102,6 +104,68 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
   const updateFlashcardOrder = (reorderedCards: Flashcard[]) => {
     setFlashcards(reorderedCards);
     updateFlashcardOrderInDb(reorderedCards);
+  };
+
+  // Add this function to check and update flashcards without a status
+  const migrateFlashcardsWithoutStatus = async (cards: Flashcard[]) => {
+    const cardsWithoutStatus = cards.filter(card => card.status === undefined);
+    
+    if (cardsWithoutStatus.length === 0) {
+      // All cards already have status values, no migration needed
+      return;
+    }
+    
+    try {
+      // Create a batch of updates
+      const updatePromises = cardsWithoutStatus.map(card => {
+        // Add default status of 0 (new/unreviewed)
+        return updateDoc(doc(db, `topics/${params.id}/flashcards`, card.id), {
+          status: 0
+        });
+      });
+      
+      // Execute all updates in parallel
+      await Promise.all(updatePromises);
+      
+      // Update the cards in local state as well
+      const updatedCards = cards.map(card => {
+        if (card.status === undefined) {
+          return { ...card, status: 0 };
+        }
+        return card;
+      });
+      
+      // Update the flashcards state
+      setFlashcards(updatedCards);
+      
+      console.log(`Migration complete: Updated ${cardsWithoutStatus.length} flashcards with default status`);
+    } catch (error) {
+      console.error('Error migrating flashcards:', error);
+    }
+  };
+
+  // Calculate and update the success average for the topic
+  const calculateAndUpdateSuccessAverage = async (cards: Flashcard[]) => {
+    if (!cards.length) return;
+    
+    try {
+      // Calculate the average status
+      let totalStatus = 0;
+      for (const card of cards) {
+        // Count cards with no status as status 1 (NEW)
+        totalStatus += (!card.status || card.status === 0) ? 1 : card.status;
+      }
+      
+      const average = totalStatus / cards.length;
+      const roundedAverage = Math.round(average * 100) / 100; // Round to 2 decimal places
+      
+      // Update the topic's success average in Firestore
+      await updateTopicSuccessAverage(params.id, roundedAverage);
+      
+      console.log(`Success average updated: ${roundedAverage}`);
+    } catch (error) {
+      console.error('Error updating success average:', error);
+    }
   };
 
   // Fetch topic and flashcards
@@ -134,6 +198,12 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
         );
         
         setFlashcards(sortedFlashcards);
+        
+        // Migrate any flashcards without status information
+        await migrateFlashcardsWithoutStatus(sortedFlashcards);
+        
+        // Calculate and update success average
+        await calculateAndUpdateSuccessAverage(sortedFlashcards);
       } catch (error) {
         console.error('Error fetching data:', error);
       } finally {
@@ -149,6 +219,11 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
     if (!newQuestion.trim() || (!newAnswer.trim() && !newHtmlContent)) return;
     
     try {
+      // Find the highest order to add new card at the end
+      const maxOrder = flashcards.length > 0 
+        ? Math.max(...flashcards.map(card => card.idOrder || 0)) 
+        : 0;
+      
       const newFlashcard = {
         question: newQuestion,
         questionHtmlContent: newQuestionHtml,
@@ -158,12 +233,18 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
         isItalic,
         textColor,
         topicId: params.id,
-        idOrder: flashcards.length + 1
+        idOrder: maxOrder + 1,
+        status: 0 // Default to 0 (new/unreviewed) for new cards
       };
       
       const docRef = await addDoc(collection(db, `topics/${params.id}/flashcards`), newFlashcard);
       
-      setFlashcards([...flashcards, { ...newFlashcard, id: docRef.id }]);
+      const updatedFlashcards = [...flashcards, { ...newFlashcard, id: docRef.id }];
+      setFlashcards(updatedFlashcards);
+      
+      // Recalculate and update success average
+      await calculateAndUpdateSuccessAverage(updatedFlashcards);
+      
       resetForm();
       setIsCreatingCard(false);
     } catch (error) {
@@ -181,21 +262,114 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
       try {
         parsedData = JSON.parse(jsonInput);
       } catch (e) {
-        setJsonError('Invalid JSON format. Please check your input.');
+        // Extract specific JSON syntax error information
+        const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+        let detailedError = 'Invalid JSON format. ';
+        
+        // Parse common JSON error messages to provide more helpful feedback
+        if (errorMessage.includes('Unexpected token')) {
+          const match = errorMessage.match(/Unexpected token (.*?) in JSON/);
+          if (match && match[1]) {
+            const token = match[1];
+            detailedError += `Found unexpected token '${token}'. `;
+            
+            if (token === 'u') {
+              detailedError += 'This often happens with undefined values. ';
+            } else if (token === 'N') {
+              detailedError += 'This might be due to using NaN instead of a quoted string. ';
+            } else if (token === "'") {
+              detailedError += 'JSON requires double quotes (") for strings, not single quotes. ';
+            }
+          } else {
+            detailedError += errorMessage;
+          }
+        } else if (errorMessage.includes('Unexpected end of JSON input')) {
+          detailedError += 'Your JSON appears to be incomplete. Check for missing closing brackets or braces.';
+        } else if (errorMessage.includes('Unexpected number')) {
+          detailedError += 'There appears to be a number in an unexpected position. Check for missing commas or quotes.';
+        } else if (errorMessage.includes('Unexpected string')) {
+          detailedError += 'There appears to be a string in an unexpected position. Check for missing commas or colons.';
+        } else {
+          detailedError += errorMessage;
+        }
+        
+        setJsonError(detailedError);
         return;
       }
       
       // Validate JSON structure
-      if (!parsedData.cards || !Array.isArray(parsedData.cards) || parsedData.cards.length === 0) {
-        setJsonError('Invalid JSON structure. The JSON must contain a "cards" array with at least one card.');
+      if (!parsedData) {
+        setJsonError('Invalid JSON: The input is empty or null.');
+        return;
+      }
+      
+      if (typeof parsedData !== 'object' || parsedData === null) {
+        setJsonError('Invalid JSON structure: The root element must be an object.');
+        return;
+      }
+      
+      if (!('cards' in parsedData)) {
+        setJsonError('Invalid JSON structure: Missing "cards" property. The JSON must contain a "cards" array.');
+        return;
+      }
+      
+      if (!Array.isArray(parsedData.cards)) {
+        setJsonError('Invalid JSON structure: The "cards" property must be an array.');
+        return;
+      }
+      
+      if (parsedData.cards.length === 0) {
+        setJsonError('Invalid JSON structure: The "cards" array is empty. Please include at least one card.');
         return;
       }
       
       // Validate each card
       for (let i = 0; i < parsedData.cards.length; i++) {
         const card = parsedData.cards[i];
-        if (!card.question || !card.answer) {
-          setJsonError(`Card at index ${i} is missing required fields (question and answer).`);
+        
+        if (!card || typeof card !== 'object') {
+          setJsonError(`Card at index ${i} is not a valid object.`);
+          return;
+        }
+        
+        if (!('question' in card)) {
+          setJsonError(`Card at index ${i} is missing the required "question" field.`);
+          return;
+        }
+        
+        if (!('answer' in card)) {
+          setJsonError(`Card at index ${i} is missing the required "answer" field.`);
+          return;
+        }
+        
+        if (typeof card.question !== 'string' || card.question.trim() === '') {
+          setJsonError(`Card at index ${i} has an invalid "question" field. It must be a non-empty string.`);
+          return;
+        }
+        
+        if (typeof card.answer !== 'string' || card.answer.trim() === '') {
+          setJsonError(`Card at index ${i} has an invalid "answer" field. It must be a non-empty string.`);
+          return;
+        }
+        
+        // Validate optional fields if present
+        if ('isBold' in card && typeof card.isBold !== 'boolean') {
+          setJsonError(`Card at index ${i} has an invalid "isBold" field. It must be a boolean value.`);
+          return;
+        }
+        
+        if ('isItalic' in card && typeof card.isItalic !== 'boolean') {
+          setJsonError(`Card at index ${i} has an invalid "isItalic" field. It must be a boolean value.`);
+          return;
+        }
+        
+        if ('textColor' in card && (typeof card.textColor !== 'string' || !card.textColor.match(/^#([0-9A-F]{3}){1,2}$/i))) {
+          setJsonError(`Card at index ${i} has an invalid "textColor" field. It must be a valid hex color (e.g., #FFFFFF).`);
+          return;
+        }
+        
+        if ('idOrder' in card && (typeof card.idOrder !== 'number' || isNaN(card.idOrder))) {
+          setJsonError(`Card at index ${i} has an invalid "idOrder" field. It must be a number.`);
           return;
         }
       }
@@ -219,7 +393,8 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
           isItalic: card.isItalic !== undefined ? card.isItalic : false,
           textColor: card.textColor || '#FFFFFF',
           topicId: params.id,
-          idOrder: card.idOrder !== undefined ? card.idOrder : ++maxOrder
+          idOrder: card.idOrder !== undefined ? card.idOrder : ++maxOrder,
+          status: card.status !== undefined ? card.status : 0 // Use existing or default to 0
         };
         
         const docRef = await addDoc(collection(db, `topics/${params.id}/flashcards`), newFlashcard);
@@ -228,13 +403,19 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
       }
       
       // Update state with new cards
-      setFlashcards([...flashcards, ...newCards]);
+      const updatedFlashcards = [...flashcards, ...newCards];
+      setFlashcards(updatedFlashcards);
+      
+      // Recalculate and update success average
+      await calculateAndUpdateSuccessAverage(updatedFlashcards);
+      
       setJsonInput('');
       setIsImportingJson(false);
       
     } catch (error) {
       console.error('Error importing flashcards:', error);
-      setJsonError('An error occurred while importing flashcards. Please try again.');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setJsonError(`An error occurred while importing flashcards: ${errorMessage}`);
     }
   };
 
@@ -243,6 +424,10 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
     if (!editingCardId || (!newQuestion.trim() && !newHtmlContent)) return;
     
     try {
+      // Get the existing flashcard to preserve its status
+      const existingCard = flashcards.find(card => card.id === editingCardId);
+      const existingStatus = existingCard?.status || 0;
+      
       const updatedFlashcard = {
         question: newQuestion,
         questionHtmlContent: newQuestionHtml,
@@ -252,7 +437,8 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
         isItalic,
         textColor,
         topicId: params.id,
-        idOrder: flashcards.find(card => card.id === editingCardId)?.idOrder || 0
+        idOrder: flashcards.find(card => card.id === editingCardId)?.idOrder || 0,
+        status: existingStatus // Preserve existing status
       };
       
       await updateDoc(doc(db, `topics/${params.id}/flashcards`, editingCardId), updatedFlashcard);
@@ -295,6 +481,9 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
         setCurrentCardIndex(learningState.previousCardIndex);
         setShowAnswer(learningState.previousShowAnswer);
       }
+      
+      // Recalculate and update success average
+      await calculateAndUpdateSuccessAverage(updatedFlashcards);
     } catch (error) {
       console.error('Error updating flashcard:', error);
     }
@@ -437,7 +626,17 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
   const handleDeleteFlashcard = async (id: string) => {
     try {
       await deleteDoc(doc(db, `topics/${params.id}/flashcards`, id));
-      setFlashcards(flashcards.filter(card => card.id !== id));
+      
+      const updatedFlashcards = flashcards.filter(card => card.id !== id);
+      setFlashcards(updatedFlashcards);
+      
+      // Recalculate and update success average
+      if (updatedFlashcards.length > 0) {
+        await calculateAndUpdateSuccessAverage(updatedFlashcards);
+      } else {
+        // If no cards left, reset success average to 0
+        await updateTopicSuccessAverage(params.id, 0);
+      }
     } catch (error) {
       console.error('Error deleting flashcard:', error);
     }
@@ -472,6 +671,36 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
     setCurrentCardIndex(prevIndex);
     setSelectedCard(flashcards[prevIndex]);
     setShowAnswer(false);
+  };
+
+  // Function to handle status update
+  const handleStatusUpdate = async (status: number) => {
+    if (!selectedCard) return;
+    
+    try {
+      // First, update the local state
+      const updatedCard = { ...selectedCard, status: status };
+      
+      // Update the selected card
+      setSelectedCard(updatedCard);
+      
+      // Update the card in flashcards array
+      const updatedFlashcards = flashcards.map(card => 
+        card.id === selectedCard.id ? updatedCard : card
+      );
+      setFlashcards(updatedFlashcards);
+      
+      // Update in Firebase
+      await updateDoc(doc(db, `topics/${params.id}/flashcards`, selectedCard.id), {
+        status: status
+      });
+      
+      // Recalculate and update success average
+      await calculateAndUpdateSuccessAverage(updatedFlashcards);
+      
+    } catch (error) {
+      console.error('Error setting card status:', error);
+    }
   };
 
   // Get text style based on card formatting
@@ -599,6 +828,39 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
                       <path fillRule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 1.414L7.414 9H15a1 1 0 110 2H7.414l2.293 2.293a1 1 0 010 1.414z" clipRule="evenodd" />
                     </svg>
                   </button>
+                  
+                  {/* Status buttons */}
+                  <div className="flex items-center space-x-2">
+                    <span className="text-gray-700 font-medium mr-2">Status:</span>
+                    <div className="flex space-x-2">
+                      {[
+                        { value: 1, label: 'N', color: 'bg-gray-500 hover:bg-gray-600', tooltip: 'New - I haven\'t seen this before' },
+                        { value: 2, label: 'L', color: 'bg-yellow-500 hover:bg-yellow-600', tooltip: 'Learning - I\'m still learning this' },
+                        { value: 3, label: 'R', color: 'bg-blue-500 hover:bg-blue-600', tooltip: 'Reviewing - I know this but need to review' },
+                        { value: 4, label: 'M', color: 'bg-green-500 hover:bg-green-600', tooltip: 'Mastered - I know this well' }
+                      ].map((status) => {
+                        // Check if this status is selected (or if NEW should be default)
+                        const isSelected = selectedCard?.status === status.value || 
+                                           (status.value === 1 && (!selectedCard?.status || selectedCard?.status === 0));
+                        
+                        return (
+                          <button
+                            key={status.value}
+                            onClick={() => handleStatusUpdate(status.value)}
+                            className={`flex items-center justify-center transition-all duration-200 shadow-md text-white font-medium rounded-full ${
+                              isSelected
+                                ? 'transform scale-110 ring-2 ring-white w-12 h-12' // Make selected button bigger
+                                : 'opacity-80 hover:opacity-100 hover:scale-105 w-10 h-10'
+                            } ${status.color}`}
+                            title={status.tooltip}
+                          >
+                            {status.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  
                   <button
                     onClick={handleNextCard}
                     className="p-3 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-400 hover:to-red-500 rounded-full flex items-center justify-center transition-all duration-200 transform hover:scale-110 shadow-md shadow-red-500/20 hover:shadow-red-400/30"
@@ -803,7 +1065,8 @@ function SubjectPageContent({ params }: { params: { id: string } }) {
       "isBold": false,
       "isItalic": false,
       "textColor": "#FFFFFF",
-      "idOrder": 1
+      "idOrder": 1,
+      "status": 1
     }
   ]
 }`}
@@ -1103,6 +1366,26 @@ function DraggableFlashcard({ card, index, onEdit, onDelete }: {
       <div className="flex justify-between items-start mb-3 relative z-10">
         <div className="flex items-center">
           <span className="mr-2 text-gray-400 text-sm">{card.idOrder}.</span>
+          {/* Status indicator */}
+          <span 
+            className={`mr-2 w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-medium ${
+              (!card.status || card.status === 0 || card.status === 1) ? 'bg-gray-500' : 
+              card.status === 2 ? 'bg-yellow-500' : 
+              card.status === 3 ? 'bg-blue-500' : 
+              card.status === 4 ? 'bg-green-500' : 'bg-gray-400'
+            }`}
+            title={
+              (!card.status || card.status === 0 || card.status === 1) ? 'New' : 
+              card.status === 2 ? 'Learning' : 
+              card.status === 3 ? 'Reviewing' : 
+              card.status === 4 ? 'Mastered' : 'Unset'
+            }
+          >
+            {(!card.status || card.status === 0 || card.status === 1) ? 'N' : 
+              card.status === 2 ? 'L' : 
+              card.status === 3 ? 'R' : 
+              card.status === 4 ? 'M' : '?'}
+          </span>
           <h3 className="font-semibold text-lg truncate text-gray-800" style={getTextStyle(card)}>
             {card.question}
           </h3>
@@ -1127,7 +1410,7 @@ function DraggableFlashcard({ card, index, onEdit, onDelete }: {
             className="text-gray-500 hover:text-red-600 bg-gray-100 hover:bg-gray-200 p-1.5 rounded-full transition-colors"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+              <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0v-6a1 1 0 00-1-1z" clipRule="evenodd" />
             </svg>
           </button>
         </div>
@@ -1162,6 +1445,7 @@ function DraggableFlashcard({ card, index, onEdit, onDelete }: {
 function FlashcardsList() {
   const { flashcards } = useFlashcards();
   const contextValue = useContext(FlashcardsContext);
+  const [statusFilter, setStatusFilter] = useState<number | null>(null);
   
   // Access SubjectPageContent component's functions through a custom hook
   const subjectPageContext = useContext(SubjectPageContext);
@@ -1176,17 +1460,60 @@ function FlashcardsList() {
   
   const { handleEditFlashcard, handleDeleteFlashcard } = subjectPageContext;
   
+  // Filter cards by status if a filter is selected
+  const filteredCards = statusFilter === null 
+    ? flashcards 
+    : statusFilter === 1
+      ? flashcards.filter(card => !card.status || card.status === 0 || card.status === 1) // Include unset cards in NEW
+      : flashcards.filter(card => card.status === statusFilter);
+  
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-      {flashcards.map((card, index) => (
-        <DraggableFlashcard 
-          key={card.id} 
-          card={card} 
-          index={index} 
-          onEdit={handleEditFlashcard}
-          onDelete={handleDeleteFlashcard}
-        />
-      ))}
-    </div>
+    <>
+      {/* Status filter buttons */}
+      <div className="w-full mb-4 flex items-center justify-center">
+        <div className="bg-gray-100 rounded-xl p-2 inline-flex space-x-2">
+          <button
+            onClick={() => setStatusFilter(null)}
+            className={`px-3 py-1 rounded-lg transition-colors duration-200 ${
+              statusFilter === null ? 'bg-white shadow-md font-medium' : 'text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            All
+          </button>
+          {[
+            { value: 1, label: 'New', color: statusFilter === 1 ? 'bg-gray-500 text-white' : 'text-gray-600 hover:bg-gray-200' },
+            { value: 2, label: 'Learning', color: statusFilter === 2 ? 'bg-yellow-500 text-white' : 'text-gray-600 hover:bg-gray-200' },
+            { value: 3, label: 'Reviewing', color: statusFilter === 3 ? 'bg-blue-500 text-white' : 'text-gray-600 hover:bg-gray-200' },
+            { value: 4, label: 'Mastered', color: statusFilter === 4 ? 'bg-green-500 text-white' : 'text-gray-600 hover:bg-gray-200' }
+          ].map(status => (
+            <button
+              key={status.value}
+              onClick={() => setStatusFilter(status.value)}
+              className={`px-3 py-1 rounded-lg transition-colors duration-200 ${status.color}`}
+            >
+              {status.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        {filteredCards.length === 0 ? (
+          <div className="col-span-2 bg-gray-100 rounded-xl p-6 text-center text-gray-500">
+            No flashcards found with the selected status.
+          </div>
+        ) : (
+          filteredCards.map((card, index) => (
+            <DraggableFlashcard 
+              key={card.id} 
+              card={card} 
+              index={flashcards.findIndex(c => c.id === card.id)} // Keep original index for drag ordering
+              onEdit={handleEditFlashcard}
+              onDelete={handleDeleteFlashcard}
+            />
+          ))
+        )}
+      </div>
+    </>
   );
 }
